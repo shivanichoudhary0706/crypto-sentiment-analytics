@@ -1,0 +1,42 @@
+coins:
+  - symbol: "BTC/USDT"
+    exchange: "binance"
+  - symbol: "ETH/USDT"
+    exchange: "binance"
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  topics:
+    market_raw: "raw-market-data"
+    sentiment_raw: "raw-sentiment-data"
+  consumer_group: "crypto-analytics-group"
+
+sentiment_sources:
+  reddit:
+    subreddits:
+      - "CryptoCurrency"
+      - "Bitcoin"
+      - "ethereum"
+    poll_interval_seconds: 60
+  news_rss:
+    feeds:
+      - "https://www.coindesk.com/arc/outboundfeeds/rss/"
+      - "https://cointelegraph.com/rss"
+    poll_interval_seconds: 300
+
+sentiment_models:
+  finbert_model_name: "ProsusAI/finbert"
+  batch_size: 16
+
+lag_detection:
+  max_lag_minutes: 60
+  resample_frequency: "1min"
+  significance_level: 0.05
+
+signals:
+  sentiment_positive_threshold: 0.6
+  sentiment_negative_threshold: -0.6
+
+logging:
+  level: "INFO"
+  log_dir: "logs"
