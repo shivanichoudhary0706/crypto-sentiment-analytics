@@ -20,3 +20,4 @@ python-dotenv
 pyyaml
 pytest
 pytest-asyncio
+python-dateutil
