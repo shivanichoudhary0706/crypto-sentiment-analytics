@@ -12,17 +12,30 @@ kafka:
   consumer_group: "crypto-analytics-group"
 
 sentiment_sources:
-  reddit:
-    subreddits:
-      - "CryptoCurrency"
-      - "Bitcoin"
-      - "ethereum"
-    poll_interval_seconds: 60
   news_rss:
     feeds:
-      - "https://www.coindesk.com/arc/outboundfeeds/rss/"
-      - "https://cointelegraph.com/rss"
+      - name: "coindesk"
+        url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
+      - name: "cointelegraph"
+        url: "https://cointelegraph.com/rss"
+      - name: "decrypt"
+        url: "https://decrypt.co/feed"
+      - name: "theblock"
+        url: "https://www.theblock.co/rss.xml"
+      - name: "cryptoslate"
+        url: "https://cryptoslate.com/feed/"
     poll_interval_seconds: 300
+  gdelt:
+    query_terms:
+      - "bitcoin"
+      - "ethereum"
+      - "cryptocurrency"
+    poll_interval_seconds: 900
+    max_records: 75
+
+coin_keywords:
+  "BTC/USDT": ["bitcoin", "btc"]
+  "ETH/USDT": ["ethereum", "eth", "ether"]
 
 sentiment_models:
   finbert_model_name: "ProsusAI/finbert"

@@ -1,7 +1,7 @@
 websockets
 ccxt
-praw
 feedparser
+requests
 kafka-python
 psycopg2-binary
 sqlalchemy
