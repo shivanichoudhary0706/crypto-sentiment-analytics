@@ -3,11 +3,12 @@ Polls GDELT's public 2.0 DOC API on a schedule for crypto-related articles.
 No API key required.
 
 Note: GDELT rate-limiting is IP-level and documented to worsen with quick
-retries (see https://github.com/alex9smith/gdelt-doc-api/issues/22 and
-GDELT's own "Behind The Scenes: API Quotas" post). So this makes exactly
-ONE attempt per poll cycle — if rate-limited, it logs and waits for the
-next natural 15-minute cycle rather than retrying immediately, which is
-the behavior GDELT's own community has found actually clears blocks.
+retries. So this makes exactly ONE attempt per poll cycle — if rate-limited,
+it logs and waits for the next natural 15-minute cycle rather than retrying
+immediately.
+
+GDELT sometimes returns this rate-limit as a 200 OK with a plain-text
+message instead of an HTTP 429 status, so both cases are detected explicitly.
 """
 
 import asyncio
@@ -47,12 +48,26 @@ def _fetch_gdelt_articles(query: str, max_records: int) -> list:
         response = requests.get(
             GDELT_DOC_API_URL, params=params, headers=REQUEST_HEADERS, timeout=30
         )
-        if response.status_code == 429:
+
+        # GDELT sometimes returns a 200 OK with a plain-text rate-limit notice
+        # instead of a 429 status.
+        if "Please limit requests" in response.text:
             logger.warning(
-                "GDELT rate-limited us. Skipping this cycle — "
-                "will try again at the next scheduled poll rather than retrying now "
-                "(quick retries are known to prolong GDELT rate-limit blocks)."
+                "GDELT rate-limited us (shared-IP quota, likely from other "
+                "traffic on this network). Skipping this cycle."
             )
+            return []
+
+        if response.status_code == 429:
+            logger.warning("GDELT rate-limited us (429). Skipping this cycle.")
+            return []
+
+        # GDELT also sometimes returns a genuinely empty body (0 bytes) —
+        # a separate failure mode from the rate-limit text above, but equally
+        # not something we can recover from mid-cycle. Treat it the same way:
+        # log clearly and skip, rather than raising a confusing JSON error.
+        if not response.text.strip():
+            logger.warning("GDELT returned an empty response. Skipping this cycle.")
             return []
 
         response.raise_for_status()

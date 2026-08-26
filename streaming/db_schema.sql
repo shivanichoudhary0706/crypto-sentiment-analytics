@@ -47,3 +47,26 @@ CREATE INDEX IF NOT EXISTS idx_raw_sentiment_coin_tags
 
 CREATE INDEX IF NOT EXISTS idx_raw_sentiment_source_time
     ON raw_sentiment (source_name, time DESC);
+
+-- ============================
+-- Sentiment scores (FinBERT + VADER, one row per article-coin pair)
+-- ============================
+CREATE TABLE IF NOT EXISTS sentiment_scores (
+    time              TIMESTAMPTZ       NOT NULL,   -- = raw_sentiment.time, hypertable partition column
+    url               TEXT              NOT NULL,
+    coin              TEXT              NOT NULL,
+    source_name       TEXT              NOT NULL,
+    finbert_label     TEXT              NOT NULL,   -- 'positive' | 'negative' | 'neutral'
+    finbert_positive  DOUBLE PRECISION  NOT NULL,
+    finbert_negative  DOUBLE PRECISION  NOT NULL,
+    finbert_neutral   DOUBLE PRECISION  NOT NULL,
+    finbert_compound  DOUBLE PRECISION  NOT NULL,   -- positive - negative, single scalar for lag detection
+    vader_compound    DOUBLE PRECISION  NOT NULL,   -- VADER's built-in compound score, range -1 to 1
+    scored_at         TIMESTAMPTZ       NOT NULL DEFAULT now(),
+    UNIQUE (time, url, coin)
+);
+
+SELECT create_hypertable('sentiment_scores', 'time', if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_sentiment_scores_coin_time
+    ON sentiment_scores (coin, time DESC); 

@@ -21,3 +21,4 @@ pyyaml
 pytest
 pytest-asyncio
 python-dateutil
+beautifulsoup4
