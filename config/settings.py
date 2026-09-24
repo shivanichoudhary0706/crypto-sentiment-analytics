@@ -25,7 +25,7 @@ def _load_yaml_config() -> dict:
             f"config.yaml not found at {CONFIG_YAML_PATH}. "
             "Copy/create it before running any pipeline component."
         )
-    with open(CONFIG_YAML_PATH, "r") as f:
+    with open(CONFIG_YAML_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -49,9 +49,12 @@ class Settings:
 
         self.finbert_model_name = yaml_cfg["sentiment_models"]["finbert_model_name"]
         self.sentiment_batch_size = yaml_cfg["sentiment_models"]["batch_size"]
-        self.max_lag_minutes = yaml_cfg["lag_detection"]["max_lag_minutes"]
-        self.resample_frequency = yaml_cfg["lag_detection"]["resample_frequency"]
-        self.significance_level = yaml_cfg["lag_detection"]["significance_level"]
+
+        # Lag detection: passed through as a raw section. Its schema is validated
+        # by lag_detection/config.py (the module that owns it), so a problem in this
+        # analysis-only section can never stop ingestion or scoring from starting.
+        self.lag_detection = yaml_cfg.get("lag_detection") or {}
+
         self.sentiment_positive_threshold = yaml_cfg["signals"]["sentiment_positive_threshold"]
         self.sentiment_negative_threshold = yaml_cfg["signals"]["sentiment_negative_threshold"]
         self.log_level = yaml_cfg["logging"]["level"]

@@ -1,0 +1,1 @@
+"""Week 6 — Sentiment -> price lag detection (ADF/KPSS, CCF, VAR-Granger, rolling scan)."""

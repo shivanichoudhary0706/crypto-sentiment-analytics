@@ -42,9 +42,19 @@ sentiment_models:
   batch_size: 16
 
 lag_detection:
-  max_lag_minutes: 60
-  resample_frequency: "1min"
-  significance_level: 0.05
+  frequencies: ["1h", "4h"]
+  max_lag: 24
+  sentiment_column: finbert_compound
+  fill_method: zero
+  target: log_return
+  significance: 0.05
+  min_coverage_warn: 0.20
+  output_dir: reports/lag
+  rolling:
+    enabled: true
+    window_bars: 168
+    step_bars: 24
+    min_coverage: 0.20
 
 signals:
   sentiment_positive_threshold: 0.6
