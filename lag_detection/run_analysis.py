@@ -61,9 +61,10 @@ def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
     df, diag = build_dataset(conn, cfg, coin, freq)
 
     max_lag = cfg.max_lag
-    if len(df) < 5 * max_lag:
-        max_lag = max(1, len(df) // 5)
-        logger.warning("%s @ %s: only %d bars — max_lag reduced to %d", coin, freq, len(df), max_lag)
+    n_valid = diag["n_valid_bars"]
+    if n_valid < 5 * max_lag:
+        max_lag = max(1, n_valid // 5)
+        logger.warning("%s @ %s: only %d valid bars — max_lag reduced to %d", coin, freq, n_valid, max_lag)
 
     stat_df, stationarity = make_stationary(df, [CAUSE, effect], alpha)
 
@@ -73,12 +74,12 @@ def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
 
     rolling_table, rolling_summary = None, None
     rc = cfg.rolling
-    if rc.enabled and len(stat_df) >= rc.window_bars:
+    if rc.enabled and n_valid >= rc.window_bars:
         rolling_table, rolling_summary = rolling_lag_scan(
             stat_df, CAUSE, effect, rc.window_bars, rc.step_bars, max_lag, alpha, rc.min_coverage)
     elif rc.enabled:
         logger.warning("%s @ %s: %d bars < rolling window %d — rolling scan skipped",
-                       coin, freq, len(stat_df), rc.window_bars)
+                       coin, freq, n_valid, rc.window_bars)
 
     prefix = f"{coin.replace('/', '')}_{freq}_{cfg.sentiment_column}"
     out = cfg.output_dir
@@ -116,7 +117,7 @@ def _print_summary(results: list[dict]) -> None:
         fwd, rev = r["granger"]["sentiment_to_price"], r["granger"]["price_to_sentiment"]
         star = lambda sig: "*" if sig else " "  # noqa: E731
         logger.info(
-            f"{r['coin']:<9}{r['freq']:<5}{r['data']['n_bars']:>6}{100 * r['data']['coverage']:>6.1f} | "
+            f"{r['coin']:<9}{r['freq']:<5}{r['data']['n_valid_bars']:>6}{100 * r['data']['coverage']:>6.1f} | "
             f"{str(lead['lag']) + ',' + format(lead['corr'] or 0, '+.3f') + star(lead['significant_bonf']):<16}"
             f"{'L' + str(fwd['chosen_lag']) + ' p=' + format(fwd['p_value_at_chosen'], '.3f') + star(fwd['significant_at_chosen']):<16}"
             f"{'L' + str(rev['chosen_lag']) + ' p=' + format(rev['p_value_at_chosen'], '.3f') + star(rev['significant_at_chosen']):<16}"

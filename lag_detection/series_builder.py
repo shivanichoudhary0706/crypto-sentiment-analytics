@@ -113,6 +113,23 @@ def fetch_sentiment_bars(conn, coin: str, freq: str, start: datetime, end: datet
     return _frame(rows, ["bucket", "sent_mean", "sent_sum", "n_articles"])
 
 
+def _gap_runs(missing: pd.Series) -> list[dict]:
+    """Contiguous runs of missing bars -> [{'start', 'end', 'bars'}]."""
+    runs, start, count, prev = [], None, 0, None
+    for ts, is_missing in missing.items():
+        if is_missing:
+            if start is None:
+                start, count = ts, 0
+            count += 1
+            prev = ts
+        elif start is not None:
+            runs.append({"start": start.isoformat(), "end": prev.isoformat(), "bars": count})
+            start = None
+    if start is not None:
+        runs.append({"start": start.isoformat(), "end": prev.isoformat(), "bars": count})
+    return runs
+
+
 def align_series(market: pd.DataFrame, sentiment: pd.DataFrame, freq: str,
                  fill_method: str = "zero") -> tuple[pd.DataFrame, dict]:
     """Pure function (no DB) — unit-testable. Returns (dataset, diagnostics)."""
@@ -147,15 +164,24 @@ def align_series(market: pd.DataFrame, sentiment: pd.DataFrame, freq: str,
     else:
         raise ValueError(f"Unknown fill_method: {fill_method}")
 
-    df = df.dropna(subset=["log_return"])
+    # Keep the REGULAR time grid. Gap bars stay as NaN rows so that a shift of
+    # k bars always means k*freq of wall-clock time. Dropping them would glue the
+    # bars on either side of a gap together and corrupt every lag computation.
+    df = df.iloc[1:]                                   # first bar has no return
+    valid = df["log_return"].notna()
+    gaps = _gap_runs(~valid)
     diagnostics = {
         "n_bars": int(len(df)),
+        "n_valid_bars": int(valid.sum()),
         "first_bar": df.index.min().isoformat() if len(df) else None,
         "last_bar": df.index.max().isoformat() if len(df) else None,
         "partial_price_bars": partial_bars,
         "empty_price_bars": empty_bars,
-        "total_articles": int(df["n_articles"].sum()),
-        "coverage": float((df["n_articles"] > 0).mean()) if len(df) else 0.0,
+        "n_gaps": len(gaps),
+        "max_gap_bars": max((g["bars"] for g in gaps), default=0),
+        "gaps": gaps,
+        "total_articles": int(df.loc[valid, "n_articles"].sum()),
+        "coverage": float((df.loc[valid, "n_articles"] > 0).mean()) if valid.any() else 0.0,
     }
     return df, diagnostics
 
@@ -188,8 +214,14 @@ def build_dataset(conn, cfg: LagConfig, coin: str, freq: str) -> tuple[pd.DataFr
     diag.update({"coin": coin, "freq": freq, "sentiment_column": cfg.sentiment_column,
                  "fill_method": cfg.fill_method, "window_source": source,
                  "window_query_start": start.isoformat(), "window_query_end": end.isoformat()})
-    logger.info("%s @ %s: %d bars, %d articles, coverage %.1f%%",
-                coin, freq, diag["n_bars"], diag["total_articles"], 100 * diag["coverage"])
+    logger.info("%s @ %s: %d bars (%d valid), %d articles, coverage %.1f%% | window %s -> %s (%s)",
+                coin, freq, diag["n_bars"], diag["n_valid_bars"], diag["total_articles"],
+                100 * diag["coverage"], start.isoformat(), end.isoformat(), source)
+    if diag["n_gaps"]:
+        logger.warning("%s @ %s: %d gap(s) in price data, longest %d bars (%s). Granger/VAR will use "
+                       "the longest gap-free segment; pin --start/--end to analyse a clean block.",
+                       coin, freq, diag["n_gaps"], diag["max_gap_bars"],
+                       max(diag["gaps"], key=lambda g: g["bars"])["start"])
     if diag["coverage"] < cfg.min_coverage_warn:
         logger.warning("%s @ %s: only %.1f%% of bars contain news — results will be weak; "
                        "consider a coarser frequency", coin, freq, 100 * diag["coverage"])

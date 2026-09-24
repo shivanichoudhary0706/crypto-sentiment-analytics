@@ -28,6 +28,10 @@ def rolling_lag_scan(df: pd.DataFrame, cause: str, effect: str, window: int, ste
         w = df.iloc[start:start + window]
         coverage = float((w["n_articles"] > 0).mean()) if "n_articles" in w else np.nan
         row = {"window_start": w.index[0], "window_end": w.index[-1], "coverage": coverage}
+        if w[[cause, effect]].isna().any().any():
+            row["status"] = "skipped_gap"
+            rows.append(row)
+            continue
         if np.isclose(w[cause].std(), 0.0) or (not np.isnan(coverage) and coverage < min_coverage):
             row["status"] = "skipped_low_coverage"
             rows.append(row)
@@ -52,11 +56,15 @@ def rolling_lag_scan(df: pd.DataFrame, cause: str, effect: str, window: int, ste
 def summarize_rolling(table: pd.DataFrame) -> dict:
     ok = table[table["status"] == "ok"] if "status" in table else table.iloc[0:0]
     if ok.empty:
-        return {"n_windows": int(len(table)), "n_windows_ok": 0}
+        return {"n_windows": int(len(table)), "n_windows_ok": 0,
+                "status_counts": {str(k): int(v) for k, v in table["status"].value_counts().items()}
+                if "status" in table else {}}
     lags = ok["ccf_peak_lag"].dropna().astype(int)
+    status_counts = {str(k): int(v) for k, v in table["status"].value_counts().items()}
     return {
         "n_windows": int(len(table)),
         "n_windows_ok": int(len(ok)),
+        "status_counts": status_counts,
         "frac_granger_significant": float(ok["granger_significant"].mean()),
         "frac_ccf_significant_bonf": float(ok["ccf_significant_bonf"].mean()),
         "ccf_peak_lag_mode": int(lags.mode().iloc[0]) if len(lags) else None,

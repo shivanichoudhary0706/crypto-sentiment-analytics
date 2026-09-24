@@ -69,7 +69,10 @@ def stationarity_test(series: pd.Series, alpha: float = 0.05) -> dict:
 
 def make_stationary(df: pd.DataFrame, columns: list[str], alpha: float = 0.05
                     ) -> tuple[pd.DataFrame, dict]:
-    """First-difference any column whose ADF test fails to reject a unit root."""
+    """First-difference any column whose ADF test fails to reject a unit root.
+
+    Tests run on non-missing values; the returned frame keeps the regular grid (NaN in gaps).
+    """
     out = df.copy()
     report: dict[str, dict] = {}
     for col in columns:
@@ -83,7 +86,8 @@ def make_stationary(df: pd.DataFrame, columns: list[str], alpha: float = 0.05
             after = stationarity_test(out[col], alpha)
         report[col] = {"transform": transform, "before": before, "after": after}
         logger.info("Stationarity %-12s -> %-14s transform=%s", col, before["verdict"], transform)
-    return out.dropna(subset=columns), report
+    # Do NOT drop NaN rows here: gap rows must stay so the time grid remains regular.
+    return out, report
 
 
 # --------------------------------------------------------------------------- #
@@ -130,10 +134,34 @@ def peak_lag(ccf: pd.DataFrame, direction: str = "lead") -> dict:
 # --------------------------------------------------------------------------- #
 # 3. Granger causality (VAR-based)
 # --------------------------------------------------------------------------- #
+def longest_complete_run(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Longest block of consecutive rows with no NaN in `columns`.
+
+    VAR needs an unbroken sequence: stitching the two sides of a gap together
+    would make the model treat bars days apart as neighbours.
+    """
+    complete = df[columns].notna().all(axis=1).to_numpy()
+    best_start, best_len, run_start = 0, 0, None
+    for i, ok in enumerate(np.append(complete, False)):
+        if ok and run_start is None:
+            run_start = i
+        elif not ok and run_start is not None:
+            if i - run_start > best_len:
+                best_start, best_len = run_start, i - run_start
+            run_start = None
+    return df.iloc[best_start:best_start + best_len]
+
+
 def granger_test(df: pd.DataFrame, cause: str, effect: str, max_lag: int,
                  alpha: float = 0.05) -> tuple[dict, pd.DataFrame]:
     """Does the past of `cause` improve prediction of `effect` beyond effect's own past?"""
-    data = df[[effect, cause]].dropna().reset_index(drop=True)  # RangeIndex: no freq warnings
+    segment = longest_complete_run(df, [effect, cause])
+    if len(segment) < df[[effect, cause]].notna().all(axis=1).sum():
+        logger.info("Granger %s->%s: using longest gap-free segment %s -> %s (%d of %d complete rows)",
+                    cause, effect, segment.index[0] if len(segment) else None,
+                    segment.index[-1] if len(segment) else None, len(segment),
+                    int(df[[effect, cause]].notna().all(axis=1).sum()))
+    data = segment[[effect, cause]].reset_index(drop=True)  # RangeIndex: no freq warnings
     n = len(data)
     if n < MIN_OBS:
         raise ValueError(f"Need >= {MIN_OBS} observations for Granger, got {n}")
@@ -160,6 +188,7 @@ def granger_test(df: pd.DataFrame, cause: str, effect: str, max_lag: int,
     best = table.loc[table["p_fdr"].idxmin()]
     summary = {
         "cause": cause, "effect": effect, "n_obs": n, "max_lag_tested": usable,
+        "segment_start": segment.index[0], "segment_end": segment.index[-1],
         "ic_orders": orders, "bic_order_raw": bic_raw,  # 0 => no dynamics worth modelling
         "chosen_lag": chosen, "chosen_by": "bic",
         "p_value_at_chosen": chosen_p, "significant_at_chosen": chosen_p < alpha,

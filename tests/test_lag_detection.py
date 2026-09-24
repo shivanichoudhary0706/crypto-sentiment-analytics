@@ -163,3 +163,53 @@ def test_window_can_be_pinned():
 def test_window_no_data_raises():
     with pytest.raises(ValueError, match="No market_data"):
         resolve_window(_FakeConn((None, None)), "BTC/USDT", None, None)
+
+
+# --------------------------------------------------------------------------- #
+# Gaps in price data: the time grid must stay regular
+# --------------------------------------------------------------------------- #
+from lag_detection.stats_tests import longest_complete_run  # noqa: E402
+
+
+def _gapped(gap_start=500, gap_len=65):
+    df = synthetic(n=1200)
+    df.iloc[gap_start:gap_start + gap_len, df.columns.get_loc("log_return")] = np.nan
+    return df
+
+
+def test_align_keeps_gap_rows_and_reports_them():
+    idx = pd.date_range("2026-01-01", periods=6, freq="1h", tz="UTC")
+    market = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+                           "n_candles": [60] * 6}, index=idx).drop(idx[[2, 3]])  # 2-hour outage
+    df, diag = align_series(market, pd.DataFrame(), "1h")
+    assert diag["n_bars"] == 5                       # regular grid kept (first bar has no return)
+    assert diag["n_valid_bars"] == 2                 # bars 1 and 5; bar 4 has no previous close
+    assert diag["n_gaps"] == 1 and diag["max_gap_bars"] == 3
+    assert df.index.to_series().diff().dropna().nunique() == 1   # spacing is uniform
+
+
+def test_ccf_still_finds_lag_across_a_gap():
+    df = _gapped()
+    pk = peak_lag(cross_correlation(df["sentiment"], df["log_return"], 12), "lead")
+    assert pk["lag"] == TRUE_LAG and pk["significant_bonf"]
+
+
+def test_longest_complete_run_picks_biggest_segment():
+    df = _gapped(gap_start=300, gap_len=65)          # segments: 300 rows and 835 rows
+    seg = longest_complete_run(df, ["sentiment", "log_return"])
+    assert len(seg) == 1200 - 365
+    assert seg["log_return"].notna().all()
+
+
+def test_granger_uses_gap_free_segment():
+    df = _gapped(gap_start=300, gap_len=65)
+    fwd, _ = granger_test(df, "sentiment", "log_return", 12)
+    assert fwd["n_obs"] == 1200 - 365
+    assert fwd["significant_at_chosen"]
+
+
+def test_rolling_skips_windows_containing_a_gap():
+    table, summary = rolling_lag_scan(_gapped(), "sentiment", "log_return",
+                                      window=168, step=84, max_lag=12)
+    assert summary["status_counts"].get("skipped_gap", 0) >= 1
+    assert summary["ccf_peak_lag_mode"] == TRUE_LAG
