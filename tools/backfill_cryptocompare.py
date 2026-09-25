@@ -5,14 +5,10 @@ Supports rotating across MULTIPLE free-tier API keys: each key has its own
 budget. When one key gets rate-limited, the script automatically switches to
 the next and keeps going -- it only stops once every key is exhausted.
 
-Keys are hardcoded below in API_KEYS so you don't need to `set` an env var
-every run. IMPORTANT: this repo is public on GitHub. Hardcoded keys in a
-public repo are visible to anyone who looks -- add this file (or better, a
-separate `tools/_cc_keys.py` you import from) to .gitignore before pushing,
-or rotate/revoke these keys if they've already been pushed. If you'd rather
-not touch .gitignore right now, CRYPTOCOMPARE_API_KEYS (comma-separated) or
-CRYPTOCOMPARE_API_KEY (single) as env vars still work as a fallback and are
-never committed to the repo.
+Secrets: API keys are NEVER stored in this file. They are read from the
+project's .env file (git-ignored), via one of:
+    CRYPTOCOMPARE_API_KEYS=key1,key2,key3   (comma-separated, preferred)
+    CRYPTOCOMPARE_API_KEY=key1              (single key, fallback)
 
 Run from project root:
     python -m tools.backfill_cryptocompare --start 2026-08-12 --end 2026-09-22 --coins ETH/USDT
@@ -25,24 +21,15 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 import requests
+from dotenv import load_dotenv
+
+# Load .env BEFORE anything reads os.getenv (CONN below is built at import time).
+load_dotenv()
 
 BASE_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 SECONDS_BETWEEN_REQUESTS = 1.0
 MAX_PAGES_PER_COIN = 500  # hard safety cap so a bug can't loop forever
 SUMMARY_MAX_CHARS = 600  # store an excerpt, not the full republished article body
-
-# --- API keys -----------------------------------------------------------
-# Paste your 5 keys here. Each is good for ~100 calls/month on the free
-# tier, so 5 keys pool to ~500 calls/month total before this script has to
-# stop and wait for a reset.
-API_KEYS = [
-    "3310de3d1353245e951f89cc40200a53b9352b0ff7f1ce40c96ff040a5da60bb",
-    "006760072a314b80fa44d66432048ad3d8eca45f5c86322a7d052625a8cfe75d",
-    "779286f68b5175778f9c257a5fb3233aadcb413682531e71098717f1de530d1c",
-    "d7059ed591c97819980a46cf400ca3045be86cf81dbab3998b41b5a1b131e953",
-    # "PASTE_KEY_5_HERE",  # 5th key not provided yet -- add it here when you have it
-]
-# --------------------------------------------------------------------------
 
 # CryptoCompare's news categories -- map to your coin labels.
 COIN_CATEGORIES = {
@@ -79,6 +66,11 @@ class AllKeysExhaustedError(Exception):
     """Every configured API key is rate-limited or otherwise rejected."""
 
 
+def mask_key(key: str) -> str:
+    """Show only the first/last 4 chars of a key, safe for logs."""
+    return key[:4] + "..." + key[-4:] if len(key) > 8 else "***"
+
+
 class KeyPool:
     """Rotates across multiple API keys, skipping any that come back
     rate-limited, so one call to fetch_page can transparently keep going
@@ -97,8 +89,7 @@ class KeyPool:
     def mark_exhausted(self, reason: str) -> None:
         key = self.keys[self.index]
         self.exhausted.add(key)
-        masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "***"
-        print(f"    Key {self.index + 1}/{len(self.keys)} ({masked}) exhausted: {reason}")
+        print(f"    Key {self.index + 1}/{len(self.keys)} ({mask_key(key)}) exhausted: {reason}")
         self._advance()
 
     def _advance(self) -> None:
@@ -150,7 +141,7 @@ def fetch_page(pool: KeyPool, category: str, before_ts: int | None) -> list:
 
 
 def backfill_coin(conn, pool: KeyPool, coin: str, category: str,
-                   start: datetime, end: datetime) -> int:
+                  start: datetime, end: datetime) -> int:
     total_rows = 0
     before_ts = int(end.timestamp())
     ingested_at = datetime.now(timezone.utc)
@@ -219,14 +210,12 @@ def parse_date(s: str) -> datetime:
 
 
 def load_keys() -> list:
-    hardcoded = [k for k in API_KEYS if k and not k.startswith("PASTE_KEY_")]
-    if hardcoded:
-        return hardcoded
+    """Read API keys from environment (populated from .env). Never from code."""
     multi = os.getenv("CRYPTOCOMPARE_API_KEYS", "")
     if multi.strip():
         return [k.strip() for k in multi.split(",") if k.strip()]
     single = os.getenv("CRYPTOCOMPARE_API_KEY", "")
-    return [single] if single.strip() else []
+    return [single.strip()] if single.strip() else []
 
 
 def main() -> None:
@@ -234,18 +223,18 @@ def main() -> None:
     parser.add_argument("--start", required=True, help="YYYY-MM-DD (UTC, inclusive)")
     parser.add_argument("--end", default=None, help="YYYY-MM-DD (UTC). Default: now")
     parser.add_argument("--coins", default=None,
-                         help="Comma-separated coin labels matching COIN_CATEGORIES keys. "
-                              "Default: all configured")
+                        help="Comma-separated coin labels matching COIN_CATEGORIES keys. "
+                             "Default: all configured")
     args = parser.parse_args()
 
     keys = load_keys()
     if not keys:
-        print("ERROR: no API key(s) found. Paste real keys into API_KEYS near the top "
-              "of this file, or set CRYPTOCOMPARE_API_KEYS (comma-separated) / "
-              "CRYPTOCOMPARE_API_KEY (single) as env vars instead. Aborting -- an "
-              "unauthenticated request would just look like an empty result, not a clear error.")
+        print("ERROR: no API key(s) found. Add CRYPTOCOMPARE_API_KEYS=key1,key2,... "
+              "(or CRYPTOCOMPARE_API_KEY=key) to the .env file in the project root. "
+              "Aborting -- an unauthenticated request would just look like an empty "
+              "result, not a clear error.")
         return
-    print(f"Loaded {len(keys)} API key(s) for rotation.\n")
+    print(f"Loaded {len(keys)} API key(s) from environment for rotation.\n")
     pool = KeyPool(keys)
 
     start = parse_date(args.start)
