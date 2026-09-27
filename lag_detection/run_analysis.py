@@ -81,7 +81,7 @@ def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
         logger.warning("%s @ %s: %d bars < rolling window %d — rolling scan skipped",
                        coin, freq, n_valid, rc.window_bars)
 
-    prefix = f"{coin.replace('/', '')}_{freq}_{cfg.sentiment_column}"
+        prefix = f"{coin.replace('/', '')}_{freq}_{cfg.sentiment_column}_{cfg.target}"
     out = cfg.output_dir
     out.mkdir(parents=True, exist_ok=True)
     df.to_csv(out / f"{prefix}_dataset.csv")
