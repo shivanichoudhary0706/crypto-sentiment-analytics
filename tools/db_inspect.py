@@ -15,10 +15,10 @@ from psycopg2 import sql
 # Fill these in (or set as environment variables)
 CONN = dict(
     host=os.getenv("DB_HOST", "localhost"),
-    port=int(os.getenv("DB_PORT", "5432")),      # check docker-compose host port
-    dbname=os.getenv("DB_NAME", "REPLACE_ME"),
-    user=os.getenv("DB_USER", "REPLACE_ME"),
-    password=os.getenv("DB_PASSWORD", "REPLACE_ME"),
+    port=int(os.getenv("DB_PORT", "5432")),
+    dbname=os.getenv("DB_NAME", "crypto_analytics"),
+    user=os.getenv("DB_USER", "crypto_user"),
+    password=os.getenv("DB_PASSWORD", "crypto_pass"),
 )
 
 EXPORT_DIR = Path("exports")
