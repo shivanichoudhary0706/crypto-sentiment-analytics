@@ -64,7 +64,7 @@ def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
     n_valid = diag["n_valid_bars"]
     if n_valid < 5 * max_lag:
         max_lag = max(1, n_valid // 5)
-        logger.warning("%s @ %s: only %d valid bars — max_lag reduced to %d", coin, freq, n_valid, max_lag)
+        logger.warning("%s @ %s: only %d valid bars -- max_lag reduced to %d", coin, freq, n_valid, max_lag)
 
     stat_df, stationarity = make_stationary(df, [CAUSE, effect], alpha)
 
@@ -78,10 +78,10 @@ def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
         rolling_table, rolling_summary = rolling_lag_scan(
             stat_df, CAUSE, effect, rc.window_bars, rc.step_bars, max_lag, alpha, rc.min_coverage)
     elif rc.enabled:
-        logger.warning("%s @ %s: %d bars < rolling window %d — rolling scan skipped",
+        logger.warning("%s @ %s: %d bars < rolling window %d -- rolling scan skipped",
                        coin, freq, n_valid, rc.window_bars)
 
-        prefix = f"{coin.replace('/', '')}_{freq}_{cfg.sentiment_column}_{cfg.target}"
+    prefix = f"{coin.replace('/', '')}_{freq}_{cfg.sentiment_column}_{cfg.target}"
     out = cfg.output_dir
     out.mkdir(parents=True, exist_ok=True)
     df.to_csv(out / f"{prefix}_dataset.csv")

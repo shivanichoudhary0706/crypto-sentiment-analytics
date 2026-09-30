@@ -54,6 +54,7 @@ class Settings:
         # by lag_detection/config.py (the module that owns it), so a problem in this
         # analysis-only section can never stop ingestion or scoring from starting.
         self.lag_detection = yaml_cfg.get("lag_detection") or {}
+        self.event_study = yaml_cfg.get("event_study") or {}
 
         self.sentiment_positive_threshold = yaml_cfg["signals"]["sentiment_positive_threshold"]
         self.sentiment_negative_threshold = yaml_cfg["signals"]["sentiment_negative_threshold"]

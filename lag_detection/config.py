@@ -146,6 +146,85 @@ def load_config() -> LagConfig:
     return parse_lag_config(settings.lag_detection, settings.coins, PROJECT_ROOT)
 
 
+_REQUIRED_EVENT_STUDY_KEYS = ("cause_coins", "price_targets", "sentiment_column", "threshold",
+                              "cluster_window_hours", "horizon_hours", "n_baseline_samples",
+                              "n_bootstrap", "min_events", "significance", "onset_min_run",
+                              "min_effect_car", "output_dir")
+
+
+@dataclass(frozen=True)
+class EventStudyConfig:
+    cause_coins: tuple[str, ...]      # sentiment SOURCE coins (e.g. BTC/USDT, ETH/USDT)
+    price_targets: tuple[str, ...]    # price coins to test, incl. spillover targets (e.g. + LTC/USDT)
+    sentiment_column: str
+    threshold: float                 # |score| >= threshold to count as a strong article
+    cluster_window_hours: float
+    horizon_hours: int
+    n_baseline_samples: int
+    n_bootstrap: int
+    min_events: int                  # skip a (cause, target) pair with fewer events than this
+    significance: float
+    onset_min_run: int               # consecutive significant hours required to call it "onset"
+    min_effect_car: float            # |mean CAR| floor -- filters noise-level "significant" hours
+    output_dir: Path
+    start: datetime | None = None
+    end: datetime | None = None
+
+
+def parse_event_study_config(section: dict | None, project_root: Path) -> EventStudyConfig:
+    """Pure function: raw YAML dict -> validated EventStudyConfig (unit-testable)."""
+    if not section:
+        raise KeyError("config.yaml has no `event_study:` section")
+    _require(section, _REQUIRED_EVENT_STUDY_KEYS, "event_study")
+    cfg = EventStudyConfig(
+        cause_coins=tuple(section["cause_coins"]),
+        price_targets=tuple(section["price_targets"]),
+        sentiment_column=str(section["sentiment_column"]),
+        threshold=float(section["threshold"]),
+        cluster_window_hours=float(section["cluster_window_hours"]),
+        horizon_hours=int(section["horizon_hours"]),
+        n_baseline_samples=int(section["n_baseline_samples"]),
+        n_bootstrap=int(section["n_bootstrap"]),
+        min_events=int(section["min_events"]),
+        significance=float(section["significance"]),
+        onset_min_run=int(section["onset_min_run"]),
+        min_effect_car=float(section["min_effect_car"]),
+        output_dir=project_root / str(section["output_dir"]),
+    )
+    validate_event_study(cfg)
+    return cfg
+
+
+def validate_event_study(cfg: EventStudyConfig) -> None:
+    if cfg.sentiment_column not in ALLOWED_SENTIMENT_COLUMNS:
+        raise ValueError(f"event_study.sentiment_column must be one of {ALLOWED_SENTIMENT_COLUMNS}")
+    if not cfg.cause_coins:
+        raise ValueError("event_study.cause_coins is empty")
+    if not cfg.price_targets:
+        raise ValueError("event_study.price_targets is empty")
+    if cfg.threshold <= 0:
+        raise ValueError("event_study.threshold must be > 0 (compared against |score|)")
+    if cfg.cluster_window_hours <= 0:
+        raise ValueError("event_study.cluster_window_hours must be > 0")
+    if cfg.horizon_hours < 1:
+        raise ValueError("event_study.horizon_hours must be >= 1")
+    if cfg.min_events < 1:
+        raise ValueError("event_study.min_events must be >= 1")
+    if not 0 < cfg.significance < 1:
+        raise ValueError("event_study.significance must be in (0, 1)")
+    if cfg.onset_min_run < 1:
+        raise ValueError("event_study.onset_min_run must be >= 1")
+    if cfg.min_effect_car < 0:
+        raise ValueError("event_study.min_effect_car must be >= 0")
+    if cfg.start and cfg.end and cfg.end <= cfg.start:
+        raise ValueError("event_study: end must be after start")
+
+
+def load_event_study_config() -> EventStudyConfig:
+    from config.settings import PROJECT_ROOT, settings  # lazy: see module docstring
+    return parse_event_study_config(settings.event_study, PROJECT_ROOT)
+
+
 def load_db_config() -> DBConfig:
     from config.settings import settings
     values = {

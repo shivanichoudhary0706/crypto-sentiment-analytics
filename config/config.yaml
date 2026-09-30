@@ -56,6 +56,21 @@ lag_detection:
     step_bars: 24
     min_coverage: 0.20
 
+event_study:
+  cause_coins: ["BTC/USDT", "ETH/USDT"]
+  price_targets: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "LTC/USDT", "LINK/USDT"]
+  sentiment_column: finbert_compound
+  threshold: 0.6
+  cluster_window_hours: 2.0
+  horizon_hours: 48
+  n_baseline_samples: 2000
+  n_bootstrap: 1000
+  min_events: 15
+  significance: 0.05
+  onset_min_run: 2
+  min_effect_car: 0.01
+  output_dir: reports/event_study
+
 signals:
   sentiment_positive_threshold: 0.6
   sentiment_negative_threshold: -0.6
