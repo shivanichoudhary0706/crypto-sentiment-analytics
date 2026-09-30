@@ -11,7 +11,7 @@ project's .env file (git-ignored), via one of:
     CRYPTOCOMPARE_API_KEY=key1              (single key, fallback)
 
 Run from project root:
-    python -m tools.backfill_cryptocompare --start 2026-08-12 --end 2026-09-22 --coins ETH/USDT
+    python -m tools.backfill_cryptocompare --start 2026-06-01 --coins BTC,ETH,MARKET
 """
 import argparse
 import os
@@ -35,6 +35,7 @@ SUMMARY_MAX_CHARS = 600  # store an excerpt, not the full republished article bo
 COIN_CATEGORIES = {
     "BTC/USDT": "BTC",
     "ETH/USDT": "ETH",
+    "MARKET": "Regulation,Market,Trading,Blockchain",
 }
 
 CONN = dict(
@@ -115,17 +116,40 @@ def _is_error_payload(payload: dict) -> tuple:
     return False, ""
 
 
-def fetch_page(pool: KeyPool, category: str, before_ts: int | None) -> list:
+def fetch_page(pool: KeyPool, category: str, before_ts: int | None,
+               max_network_retries: int = 3) -> list:
     params = {"lang": "EN", "categories": category, "sortOrder": "latest"}
     if before_ts is not None:
         params["lTs"] = before_ts
 
     while not pool.all_exhausted():
         headers = {"authorization": f"Apikey {pool.current_key()}"}
-        resp = requests.get(BASE_URL, params=params, headers=headers, timeout=20)
-        resp.raise_for_status()
-        payload = resp.json()
-
+        # Retry the SAME key only for transient failures: connection errors,
+        # timeouts, and HTTP 5xx. A 4xx (bad/exhausted key, rate limit) is an
+        # API-level problem and must fall through to key handling, not be
+        # retried blindly on the same key.
+        payload = None
+        for attempt in range(1, max_network_retries + 1):
+            try:
+                resp = requests.get(BASE_URL, params=params, headers=headers, timeout=20)
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout) as e:
+                if attempt == max_network_retries:
+                    raise
+                wait = 2 ** attempt
+                print(f"    Network error ({e.__class__.__name__}) -- retry "
+                      f"{attempt}/{max_network_retries} in {wait}s...")
+                time_module.sleep(wait)
+                continue
+            if resp.status_code >= 500 and attempt < max_network_retries:
+                wait = 2 ** attempt
+                print(f"    Server error HTTP {resp.status_code} -- retry "
+                      f"{attempt}/{max_network_retries} in {wait}s...")
+                time_module.sleep(wait)
+                continue
+            resp.raise_for_status()
+            payload = resp.json()
+            break
         is_error, message = _is_error_payload(payload)
         if is_error:
             pool.mark_exhausted(message)
