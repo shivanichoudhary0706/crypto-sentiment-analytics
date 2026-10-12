@@ -24,3 +24,4 @@ data/
 checkpoints/
 docker-volumes/
 reports/
+data/lake/

@@ -55,6 +55,19 @@ services:
       - timescaledb
     ports:
       - "8081:8080"
-      
+
+  spark:
+    image: apache/spark:3.5.3        # confirm a python3-enabled tag on Docker Hub before pulling
+    container_name: crypto-spark
+    command: ["sleep", "infinity"]   # idle container; jobs are submitted with docker exec
+    volumes:
+      - ./batch:/app/batch:ro
+      - ./data/lake:/data/lake
+    profiles: ["batch"]          
+    environment:
+      PYTHONPATH: /opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
+      PYSPARK_PYTHON: python3    
 volumes:
   timescale_data:
+
+     
