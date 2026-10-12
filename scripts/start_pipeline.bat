@@ -1,7 +1,7 @@
 @echo off
 REM Starts the live pipeline: infrastructure, then consumers, producers and scorer.
 REM Each Python process runs in its own titled window so failures are visible.
-cd /d D:\crypto-sentiment-analytics
+cd /d "%~dp0.."
 call venv\Scripts\activate
 
 echo Starting infrastructure...
