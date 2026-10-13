@@ -25,6 +25,10 @@ _TEXT_COLS = {"symbol", "coin", "freq"}
 
 
 def _col_type(col: str) -> str:
+    if col.endswith("_news_count"):
+        return "INTEGER"
+    if col.endswith(("_news_score", "_news_roll")):
+        return "DOUBLE PRECISION"
     if col == "bucket":
         return "TIMESTAMPTZ NOT NULL"
     if col in _TEXT_COLS:
@@ -36,11 +40,20 @@ def _col_type(col: str) -> str:
     return "DOUBLE PRECISION"
 
 
-def ensure_schema(conn, table: str) -> None:
-    """Create the features hypertable and job_runs table. Safe to re-run."""
+def ensure_schema(conn, table: str, columns: tuple[str, ...] = FEATURE_COLUMNS) -> list[str]:
+    """Create the features hypertable and job_runs table, and add any column that
+    the current config needs but the existing table lacks (e.g. a new news stream).
+    Safe to re-run. Returns the names of columns added to an EXISTING table."""
     cols = sql.SQL(",\n    ").join(
-        sql.SQL("{} {}").format(sql.Identifier(c), sql.SQL(_col_type(c))) for c in FEATURE_COLUMNS
+        sql.SQL("{} {}").format(sql.Identifier(c), sql.SQL(_col_type(c))) for c in columns
     )
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL", (table,))
+        existed = cur.fetchone()[0]
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+                    (table,))
+        present = {r[0] for r in cur.fetchall()}
+    conn.commit()
     ddl = sql.SQL("""
 CREATE TABLE IF NOT EXISTS {table} (
     {cols},
@@ -72,10 +85,17 @@ BEGIN
 END $$;
 """).format(tbl=sql.Literal(table))
 
+    # Migration: new columns are added NULLable; the caller backfills them with a full refresh.
+    added = [c for c in columns if existed and c not in present]
     with conn.cursor() as cur:
         cur.execute(ddl)
         cur.execute(hyper)
+        for c in added:
+            # _col_type of a new column never contains NOT NULL (only base columns do).
+            cur.execute(sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {}").format(
+                sql.Identifier(table), sql.Identifier(c), sql.SQL(_col_type(c))))
     conn.commit()
+    return added
 
 
 # ------------------------------------------------------------------ locking
@@ -159,9 +179,9 @@ WHERE coin = ANY(%(coins)s) AND {where}
 
 
 # ------------------------------------------------------------------ write
-def _to_records(df: pd.DataFrame) -> list[tuple]:
+def _to_records(df: pd.DataFrame, columns: tuple[str, ...]) -> list[tuple]:
     """DataFrame -> plain Python tuples (NaN -> NULL, numpy scalars -> Python)."""
-    obj = df[list(FEATURE_COLUMNS)].astype(object)
+    obj = df[list(columns)].astype(object)
     obj = obj.where(pd.notna(obj), None)
     records = []
     for row in obj.itertuples(index=False, name=None):
@@ -170,20 +190,21 @@ def _to_records(df: pd.DataFrame) -> list[tuple]:
     return records
 
 
-def upsert_features(conn, table: str, df: pd.DataFrame, page_size: int = 1000) -> int:
+def upsert_features(conn, table: str, df: pd.DataFrame,
+                    columns: tuple[str, ...] = FEATURE_COLUMNS, page_size: int = 1000) -> int:
     """Idempotent write: re-running over the same bars updates them in place."""
     if df.empty:
         return 0
-    cols = sql.SQL(", ").join(sql.Identifier(c) for c in FEATURE_COLUMNS)
+    cols = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
     updates = sql.SQL(", ").join(
         sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c))
-        for c in FEATURE_COLUMNS if c not in ("bucket", "symbol", "freq")
+        for c in columns if c not in ("bucket", "symbol", "freq")
     )
     q = sql.SQL("""
 INSERT INTO {table} ({cols}) VALUES %s
 ON CONFLICT (symbol, freq, bucket) DO UPDATE SET {updates}, computed_at = now()
 """).format(table=sql.Identifier(table), cols=cols, updates=updates)
-    records = _to_records(df)
+    records = _to_records(df, columns)
     with conn.cursor() as cur:
         execute_values(cur, q.as_string(conn), records, page_size=page_size)
     conn.commit()

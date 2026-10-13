@@ -57,9 +57,10 @@ def _json_default(o):
 
 
 def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
-    effect, alpha = cfg.target, cfg.significance
-    df, diag = build_dataset(conn, cfg, coin, freq)
-
+    if diag["total_articles"] == 0:
+        # Price-only coins (e.g. SOL/LTC/LINK) have no news of their own: nothing to test.
+        logger.warning("%s @ %s: no articles for this coin -- skipped (price-only coin)", coin, freq)
+        return None
     max_lag = cfg.max_lag
     n_valid = diag["n_valid_bars"]
     if n_valid < 5 * max_lag:
@@ -170,7 +171,9 @@ def main(argv: list[str] | None = None) -> int:
         for coin in cfg.coins:
             for freq in cfg.frequencies:
                 try:
-                    results.append(analyse_one(conn, cfg, coin, freq))
+                    result = analyse_one(conn, cfg, coin, freq)
+                    if result is not None:
+                        results.append(result)
                 except Exception:
                     failures += 1
                     logger.exception("Analysis failed for %s @ %s", coin, freq)

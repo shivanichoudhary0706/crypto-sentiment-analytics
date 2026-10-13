@@ -3,6 +3,12 @@ coins:
     exchange: "binance"
   - symbol: "ETH/USDT"
     exchange: "binance"
+  - symbol: "SOL/USDT"
+    exchange: "binance"
+  - symbol: "LTC/USDT"
+    exchange: "binance"
+  - symbol: "LINK/USDT"
+    exchange: "binance"
 
 kafka:
   bootstrap_servers: "localhost:9092"
@@ -78,6 +84,11 @@ features:
   rolling_long_bars: 24          # 24h at 1h bars, 4 days at 4h bars
   incremental_lookback_bars: 6   # bars re-computed on every incremental run
   table: features_bar
+    # News attached to EVERY coin's bars (model inputs). key -> sentiment_scores.coin
+  news_streams:
+    btc: "BTC/USDT"
+    eth: "ETH/USDT"
+    mkt: "MARKET"
   
 signals:
   sentiment_positive_threshold: 0.6

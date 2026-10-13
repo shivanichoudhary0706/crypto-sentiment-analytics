@@ -178,7 +178,8 @@ def test_output_columns_and_empty_inputs():
 
 # ---------------------------------------------------------------- config + run plan
 _GOOD = {"frequencies": ["1h", "4h"], "rolling_short_bars": 6, "rolling_long_bars": 24,
-         "incremental_lookback_bars": 6, "table": "features_bar"}
+         "incremental_lookback_bars": 6, "table": "features_bar",
+         "news_streams": {"btc": "BTC/USDT", "mkt": "MARKET"}}
 _COINS = [{"symbol": "BTC/USDT"}, {"symbol": "ETH/USDT"}]
 
 
@@ -232,3 +233,38 @@ def test_cli_validation():
         parse_args(["--every", "5"])
     with pytest.raises(SystemExit):
         parse_args(["--every", "300", "--start", "2026-06-01"])
+
+
+
+# ---------------------------------------------------------------- news streams
+STREAMS = {"btc": "BTC/USDT", "mkt": "MARKET"}
+
+
+def test_news_streams_reach_price_only_coins():
+    """SOL has no news of its own, but its rows must carry BTC and MARKET news."""
+    candles = pd.concat([make_candles("BTCUSDT", 60000, 4, 20), make_candles("SOLUSDT", 150, 4, 21)],
+                        ignore_index=True)
+    scores = scores_df([
+        (T0 + timedelta(minutes=5), "b1", "BTC/USDT", 0.8, 0.5, "positive"),
+        (T0 + timedelta(minutes=40), "b2", "BTC/USDT", 0.4, 0.1, "positive"),
+        (T0 + timedelta(hours=2, minutes=1), "m1", "MARKET", -0.6, -0.2, "negative"),
+    ])
+    s2c = {**SYMBOL_TO_COIN, "SOLUSDT": "SOL/USDT"}
+    out = tf.build_features(candles, scores, ("1h",), 3, 6, s2c, STREAMS)
+    assert tuple(out.columns) == tf.feature_columns(("btc", "mkt"))
+    sol = one(out, "SOLUSDT")
+    assert (sol["n_articles"] == 0).all() and (sol["finbert_score"] == 0).all()   # no own news
+    assert sol.iloc[0]["btc_news_score"] == pytest.approx(0.6)                    # mean(0.8, 0.4)
+    assert sol.iloc[0]["btc_news_count"] == 2
+    assert sol.iloc[2]["mkt_news_score"] == pytest.approx(-0.6)
+    assert sol.iloc[1]["mkt_news_count"] == 0 and sol.iloc[1]["mkt_news_score"] == 0.0
+    assert sol.iloc[1]["btc_news_roll"] == pytest.approx(0.3)                     # mean(0.6, 0.0)
+    # The same stream values appear on the BTC rows (stream = shared market context).
+    btc = one(out, "BTCUSDT")
+    np.testing.assert_allclose(btc["btc_news_score"], sol["btc_news_score"])
+    np.testing.assert_allclose(btc["btc_news_score"], btc["finbert_score"])        # BTC's own news
+
+
+def test_no_streams_means_base_columns_only():
+    out = tf.build_features(make_candles("BTCUSDT", 60000, 3, 22), None, ("1h",), 2, 4, SYMBOL_TO_COIN)
+    assert tuple(out.columns) == tf.FEATURE_COLUMNS        

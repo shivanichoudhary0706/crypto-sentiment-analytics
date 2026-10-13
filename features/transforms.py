@@ -12,6 +12,10 @@ tests/test_features.py, and to be matched by any future PySpark engine):
     shift of k rows always means k * freq of wall-clock time.
   * Rolling windows are row-based over that regular grid and include bar t itself.
     A signal for bar t+1 may therefore use features of bar t — never bar t+1.
+  * News streams: every coin's row also carries the news of a few configured
+    "stream" coins (e.g. btc = BTC/USDT, eth = ETH/USDT, mkt = MARKET), as
+    <key>_news_score / <key>_news_count / <key>_news_roll. This is how coins
+    without news of their own (SOL, LTC, LINK) get a news signal.
 
 Inputs
   candles: time (tz-aware UTC), symbol, open, high, low, close, volume
@@ -29,6 +33,8 @@ MINUTE = pd.Timedelta(minutes=1)
 
 # Column order of the features_bar table. Shared by transform, DDL and upsert so
 # they cannot drift apart silently. A future Spark engine must emit exactly this.
+# The full column list is feature_columns(stream_keys): these base columns plus
+# three columns per configured news stream.
 FEATURE_COLUMNS = (
     "bucket", "symbol", "coin", "freq",
     "open", "high", "low", "close", "volume", "n_candles", "is_complete",
@@ -39,6 +45,14 @@ FEATURE_COLUMNS = (
     "articles_roll_short", "articles_roll_long",
     "ret_vol_short", "ret_vol_long",
 )
+
+NEWS_SUFFIXES = ("news_score", "news_count", "news_roll")
+
+
+def feature_columns(stream_keys=()) -> tuple[str, ...]:
+    """Base columns + <key>_news_score / _news_count / _news_roll per stream."""
+    return FEATURE_COLUMNS + tuple(f"{k}_{sfx}" for k in stream_keys for sfx in NEWS_SUFFIXES)
+
 
 CANDLE_COLUMNS = ("time", "symbol", "open", "high", "low", "close", "volume")
 SCORE_COLUMNS = ("time", "url", "coin", "finbert_compound", "vader_compound", "finbert_label")
@@ -124,7 +138,7 @@ def assemble_symbol(mbars: pd.DataFrame, sbars: pd.DataFrame, freq: str,
 
     s = sbars.set_index("bucket").drop(columns="symbol").reindex(df.index)
     for col in ("n_articles", "n_positive", "n_negative"):
-            df[col] = pd.to_numeric(s[col]).fillna(0).astype(int)
+        df[col] = pd.to_numeric(s[col]).fillna(0).astype(int)
     df["finbert_mean"] = s["finbert_mean"].astype(float)
     df["vader_mean"] = s["vader_mean"].astype(float)
 
@@ -147,14 +161,37 @@ def assemble_symbol(mbars: pd.DataFrame, sbars: pd.DataFrame, freq: str,
     return df.reset_index()
 
 
+def add_news_streams(df: pd.DataFrame, sbars: pd.DataFrame, news_streams: dict[str, str],
+                     rolling_short: int) -> pd.DataFrame:
+    """Attach each news stream's per-bar score/count to one symbol's feature rows.
+
+    `df` must have a regular `bucket` column; `sbars` is sentiment_bars() for ALL
+    coins. A bar with no article in that stream gets score 0.0 and count 0.
+    """
+    short = dict(window=rolling_short, min_periods=1)
+    for key, coin in news_streams.items():
+        stream_symbol = coin.replace("/", "").upper()
+        s = (sbars[sbars["symbol"] == stream_symbol].set_index("bucket")
+             .reindex(df["bucket"]))
+        score = pd.to_numeric(s["finbert_mean"]).fillna(0.0).to_numpy()
+        count = pd.to_numeric(s["n_articles"]).fillna(0).astype(int).to_numpy()
+        df[f"{key}_news_score"] = score
+        df[f"{key}_news_count"] = count
+        df[f"{key}_news_roll"] = df[f"{key}_news_score"].rolling(**short).mean()
+    return df
+
+
 def build_features(candles: pd.DataFrame, scores: pd.DataFrame | None,
                    frequencies: tuple[str, ...], rolling_short: int, rolling_long: int,
-                   symbol_to_coin: dict[str, str]) -> pd.DataFrame:
-    """Full transform for all symbols and frequencies -> rows in FEATURE_COLUMNS order."""
+                   symbol_to_coin: dict[str, str],
+                   news_streams: dict[str, str] | None = None) -> pd.DataFrame:
+    """Full transform for all symbols and frequencies -> rows in feature_columns() order."""
+    news_streams = dict(news_streams or {})
+    columns = list(feature_columns(tuple(news_streams)))
     if scores is None or scores.empty:
         scores = _empty_scores()
     if candles.empty:
-        return pd.DataFrame(columns=list(FEATURE_COLUMNS))
+        return pd.DataFrame(columns=columns)
 
     candles = with_minute_returns(candles)
     frames = []
@@ -168,7 +205,8 @@ def build_features(candles: pd.DataFrame, scores: pd.DataFrame | None,
             out["symbol"] = symbol
             out["coin"] = symbol_to_coin.get(symbol, symbol)
             out["freq"] = freq
-            frames.append(out[list(FEATURE_COLUMNS)])
+            out = add_news_streams(out, sb, news_streams, rolling_short)
+            frames.append(out[columns])
     if not frames:
-        return pd.DataFrame(columns=list(FEATURE_COLUMNS))
+        return pd.DataFrame(columns=columns)
     return pd.concat(frames, ignore_index=True)

@@ -3,6 +3,8 @@ Configuration for the feature job.
 
 Single source of truth (same rules as lag_detection/config.py):
   * Coins       -> top-level `coins:` list in config/config.yaml
+  * News streams-> `features.news_streams`: {short_key: sentiment_scores.coin}; each
+                   stream's news is attached to EVERY coin's bars as model input
   * Parameters  -> the `features:` section (all keys REQUIRED, no silent defaults)
   * DB login    -> TIMESCALEDB_* secrets via config.settings
   * Date window -> not configured; incremental watermark, or --start/--end on the CLI
@@ -21,7 +23,7 @@ FREQ_TO_SECONDS = {"15min": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 FREQ_TO_PANDAS = {"15min": "15min", "1h": "1h", "4h": "4h", "1d": "1D"}
 
 _REQUIRED_KEYS = ("frequencies", "rolling_short_bars", "rolling_long_bars",
-                  "incremental_lookback_bars", "table")
+                  "incremental_lookback_bars", "table", "news_streams")
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,12 @@ class FeatureConfig:
     rolling_long_bars: int
     incremental_lookback_bars: int      # bars re-computed on every incremental run
     table: str
+    news_streams: dict                  # e.g. {"btc": "BTC/USDT", "mkt": "MARKET"}
+
+    @property
+    def score_coins(self) -> tuple[str, ...]:
+        """Every sentiment_scores.coin the job must read: own coins + news streams."""
+        return tuple(dict.fromkeys((*self.coins, *self.news_streams.values())))
 
     @property
     def symbol_to_coin(self) -> dict[str, str]:
@@ -77,6 +85,14 @@ def parse_feature_config(section: dict | None, coins_cfg: list[dict]) -> Feature
     if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", table):
         raise ValueError(f"features.table must be a plain lowercase SQL identifier, got {table!r}")
 
+    streams = section["news_streams"] or {}
+    if not isinstance(streams, dict):
+        raise ValueError("features.news_streams must be a mapping, e.g. {btc: BTC/USDT, mkt: MARKET}")
+    # Keys become column-name prefixes (<key>_news_score), so they must be short plain names.
+    bad_keys = [k for k in streams if not re.fullmatch(r"[a-z][a-z0-9]{0,9}", str(k))]
+    if bad_keys:
+        raise ValueError(f"features.news_streams keys must be short lowercase names, got {bad_keys}")
+
     cfg = FeatureConfig(
         coins=coins,
         frequencies=freqs,
@@ -84,6 +100,7 @@ def parse_feature_config(section: dict | None, coins_cfg: list[dict]) -> Feature
         rolling_long_bars=int(section["rolling_long_bars"]),
         incremental_lookback_bars=int(section["incremental_lookback_bars"]),
         table=table,
+        news_streams={str(k): str(v) for k, v in streams.items()},
     )
     if not 2 <= cfg.rolling_short_bars < cfg.rolling_long_bars:
         raise ValueError("features: need 2 <= rolling_short_bars < rolling_long_bars")

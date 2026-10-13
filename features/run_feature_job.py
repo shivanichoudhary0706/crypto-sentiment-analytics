@@ -24,7 +24,7 @@ import psycopg2
 from config.logging_config import get_logger
 from features import store
 from features.config import FeatureConfig, load_config
-from features.transforms import build_features
+from features.transforms import build_features, feature_columns
 from lag_detection.config import to_utc
 
 logger = get_logger(__name__)
@@ -73,16 +73,16 @@ def run_once(conn, cfg: FeatureConfig, full_refresh: bool = False,
 
         symbols = tuple(cfg.symbol_to_coin)
         candles = store.fetch_candles(conn, symbols, plan.read_from, plan.read_end)
-        scores = store.fetch_scores(conn, cfg.coins, plan.read_from, plan.read_end)
+        scores = store.fetch_scores(conn, cfg.score_coins, plan.read_from, plan.read_end)
         t_read = time.perf_counter()
 
         feats = build_features(candles, scores, cfg.frequencies, cfg.rolling_short_bars,
-                               cfg.rolling_long_bars, cfg.symbol_to_coin)
+                               cfg.rolling_long_bars, cfg.symbol_to_coin, cfg.news_streams)
         if plan.write_from is not None and not feats.empty:
             feats = feats[feats["bucket"] >= plan.write_from]
         t_build = time.perf_counter()
 
-        n = store.upsert_features(conn, cfg.table, feats)
+        n = store.upsert_features(conn, cfg.table, feats, feature_columns(tuple(cfg.news_streams)))
         t_write = time.perf_counter()
 
         summary = (f"mode={plan.mode} write_from={plan.write_from} candles={len(candles)} "
@@ -134,8 +134,13 @@ def main(argv=None) -> None:
     start, end = to_utc(args.start), to_utc(args.end)
 
     conn = _connect()
-    store.ensure_schema(conn, cfg.table)
-    logger.info("Feature job: coins=%s freqs=%s table=%s", list(cfg.coins), list(cfg.frequencies), cfg.table)
+    added = store.ensure_schema(conn, cfg.table, feature_columns(tuple(cfg.news_streams)))
+    if added:
+        # Old rows have NULL in the new columns; only a full rebuild fills them.
+        logger.warning("Added new column(s) %s to %s -> forcing a full refresh", added, cfg.table)
+        args.full_refresh = True
+    logger.info("Feature job: coins=%s news_streams=%s freqs=%s table=%s", list(cfg.coins),
+                cfg.news_streams, list(cfg.frequencies), cfg.table)
 
     if not args.every:
         run_once(conn, cfg, args.full_refresh, start, end)
