@@ -71,6 +71,14 @@ event_study:
   min_effect_car: 0.01
   output_dir: reports/event_study
 
+features:
+  # Fills the features_bar table that signals, backtesting and the dashboard read.
+  frequencies: ["1h", "4h"]
+  rolling_short_bars: 6          # 6h at 1h bars, 24h at 4h bars
+  rolling_long_bars: 24          # 24h at 1h bars, 4 days at 4h bars
+  incremental_lookback_bars: 6   # bars re-computed on every incremental run
+  table: features_bar
+  
 signals:
   sentiment_positive_threshold: 0.6
   sentiment_negative_threshold: -0.6

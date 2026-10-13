@@ -100,7 +100,10 @@ def run() -> None:
             else:
                 logger.info("No unscored articles found this cycle.")
 
-            time.sleep(POLL_INTERVAL_SECONDS)
+            # Drain mode: a full batch means more are waiting, so go again
+            # immediately. Sleep only once the queue is (nearly) empty.
+            if len(articles) < BATCH_SIZE:
+                time.sleep(POLL_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
         logger.info("Sentiment scoring stopped by user.")
