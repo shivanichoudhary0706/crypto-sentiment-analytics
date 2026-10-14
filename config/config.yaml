@@ -89,7 +89,32 @@ features:
     btc: "BTC/USDT"
     eth: "ETH/USDT"
     mkt: "MARKET"
-  
+
+signal_model:
+  # BUY / HOLD / SELL for the target coins, learned from past features_bar rows.
+  targets: ["SOL/USDT", "LTC/USDT", "LINK/USDT"]   # coins we emit signals for
+  input_coins: ["BTC/USDT", "ETH/USDT"]           # their price moves are model inputs
+  freq: "1h"                 # model works on hourly bars
+  horizon_bars: 1            # predict the next 1 bar (1 hour)
+  buy_threshold: 0.55        # P(up) >= 0.55 -> BUY
+  sell_threshold: 0.45       # P(up) <= 0.45 -> SELL, otherwise HOLD
+  train_window_bars: 2160    # learn from the latest 90 days of hourly bars per coin
+  min_train_bars: 500        # no signal for a coin with less labelled history
+  table: signals
+  model:                     # scikit-learn HistGradientBoostingClassifier
+    max_iter: 200
+    learning_rate: 0.05
+    max_depth: 3
+    min_samples_leaf: 50
+    l2_regularization: 1.0
+    random_state: 42
+  backtest:                  # python -m signals.run_backtest
+    test_days: 60            # replay the most recent 60 days
+    retrain_every_bars: 24   # retrain once per simulated day
+    fee_bps: 10              # 0.1% per buy or sell (Binance spot)
+    output_dir: reports/backtest
+
+
 signals:
   sentiment_positive_threshold: 0.6
   sentiment_negative_threshold: -0.6
