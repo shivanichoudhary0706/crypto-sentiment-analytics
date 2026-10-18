@@ -16,6 +16,7 @@ Run from project root:
 import argparse
 import os
 import time as time_module
+import re
 from datetime import datetime, timezone
 
 import psycopg2
@@ -30,6 +31,19 @@ BASE_URL = "https://min-api.cryptocompare.com/data/v2/news/"
 SECONDS_BETWEEN_REQUESTS = 1.0
 MAX_PAGES_PER_COIN = 500  # hard safety cap so a bug can't loop forever
 SUMMARY_MAX_CHARS = 600  # store an excerpt, not the full republished article body
+
+
+def dedupe_batch(rows, key_positions):
+    """Drop rows that share the ON CONFLICT key within one batch (last one wins).
+
+    key_positions: tuple indexes of the conflict columns in each row tuple,
+    in the same order as the column list in INSERT_SQL.
+    """
+    unique = {}
+    for row in rows:
+        unique[tuple(row[i] for i in key_positions)] = row
+    dropped = len(rows) - len(unique)
+    return list(unique.values()), dropped
 
 # CryptoCompare's news categories -- map to your coin labels.
 COIN_CATEGORIES = {
@@ -57,6 +71,13 @@ INSERT_SQL = """
         )
     )
 """
+# Positions of the ON CONFLICT key inside each row tuple, derived from INSERT_SQL's
+# column list so they can never drift out of sync with the INSERT.
+_INSERT_COLS = [
+    c.strip()
+    for c in re.search(r"INSERT INTO raw_sentiment\s*\((.*?)\)", INSERT_SQL, re.S).group(1).split(",")
+]
+CONFLICT_KEY_POSITIONS = tuple(_INSERT_COLS.index(c) for c in ("time", "url"))
 # NOTE: the same article (same time+url) can legitimately be tagged for
 # multiple coins -- e.g. CryptoCompare returns one "BTC and ETH both rallied"
 # article under both the BTC and ETH category queries. DO UPDATE merges
@@ -195,6 +216,10 @@ def backfill_coin(conn, pool: KeyPool, coin: str, category: str,
                 body = (a.get("body") or "")[:SUMMARY_MAX_CHARS]
                 source_name = (a.get("source_info") or {}).get("name") or a.get("source", "unknown")
 
+
+                url = a.get("url")
+                if not url:
+                    continue
                 rows.append((
                     pub_dt,
                     "cryptocompare",
@@ -207,6 +232,9 @@ def backfill_coin(conn, pool: KeyPool, coin: str, category: str,
                 ))
 
             if rows:
+                rows, dropped = dedupe_batch(rows, CONFLICT_KEY_POSITIONS)
+                if dropped:
+                    print(f"    {coin}: dropped {dropped} in-batch duplicate(s)")
                 psycopg2.extras.execute_values(cur, INSERT_SQL, rows)
                 conn.commit()
             total_rows += len(rows)

@@ -114,6 +114,16 @@ signal_model:
     fee_bps: 10              # 0.1% per buy or sell (Binance spot)
     output_dir: reports/backtest
 
+  tuning:                    # python -m signals.run_tuning
+    choose_days: 30          # older 30 days: pick the best candidate
+    confirm_days: 30         # newest 30 days: prove it on unseen data
+    output_dir: reports/tuning
+    candidates:              # same training history (days) for all; only these differ
+      - {freq: "1h", buy_threshold: 0.55, sell_threshold: 0.45}
+      - {freq: "1h", buy_threshold: 0.58, sell_threshold: 0.42}
+      - {freq: "4h", buy_threshold: 0.55, sell_threshold: 0.45}
+      - {freq: "4h", buy_threshold: 0.58, sell_threshold: 0.42}    
+
 
 signals:
   sentiment_positive_threshold: 0.6

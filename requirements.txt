@@ -21,3 +21,4 @@ pytest
 pytest-asyncio
 python-dateutil
 beautifulsoup4
+scikit-learn
