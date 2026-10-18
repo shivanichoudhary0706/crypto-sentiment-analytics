@@ -22,5 +22,6 @@ start "storage-consumers"   cmd /k python -m streaming.run_storage_consumers
 start "market-ingestion"    cmd /k python -m ingestion.market.run_market_ingestion
 start "sentiment-ingestion" cmd /k python -m ingestion.sentiment.run_sentiment_ingestion
 start "sentiment-scoring"   cmd /k python -m sentiment.run_sentiment_scoring
+start "signals"             cmd /k python -m signals.run_signals --every 300
 
-echo Pipeline started. 4 windows should be open.
+echo Pipeline started. 5 windows should be open.
