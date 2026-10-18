@@ -20,4 +20,4 @@ def tag_coins(text: str) -> List[str]:
     for symbol, keywords in settings.coin_keywords.items():
         if any(keyword in text_lower for keyword in keywords):
             matched.append(symbol)
-    return matched
+        return matched or ["MARKET"]   # no coin keyword matched -> market-wide crypto news
