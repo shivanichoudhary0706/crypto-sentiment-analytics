@@ -22,3 +22,9 @@ pytest-asyncio
 python-dateutil
 beautifulsoup4
 scikit-learn
+fastapi
+uvicorn[standard]
+httpx
+streamlit
+plotly
+requests
