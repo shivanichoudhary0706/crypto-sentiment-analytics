@@ -12,6 +12,8 @@ Env vars (same as db_inspect.py): DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWOR
 """
 import argparse
 import os
+import random
+import sys
 import time as time_module
 from datetime import datetime, timedelta, timezone
 
@@ -46,8 +48,27 @@ def to_ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
 
+MAX_ATTEMPTS = 6
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_SESSION = requests.Session()   # reuses the TCP/TLS connection across pages
+
+
+class BinanceBanError(RuntimeError):
+    """HTTP 418: Binance has banned this IP for ignoring rate limits. Never retry."""
+
+
+def _backoff(attempt: int) -> float:
+    """Exponential backoff with jitter: ~1s, 2s, 4s, 8s, 16s (capped at 60s)."""
+    return min(60, 2 ** (attempt - 1)) + random.uniform(0, 1)
+
+
 def fetch_klines(symbol: str, start_ms: int, end_ms: int) -> list:
-    """One page (<=1000 candles) of raw Binance kline arrays."""
+    """One page (<=1000 candles) of raw Binance kline arrays.
+
+    Retries transient failures here, in application code. urllib3's Retry
+    (mounted on a Session) would NOT cover a timeout while the response BODY is
+    being read -- which is exactly the failure seen on 2026-10-24.
+    """
     params = {
         "symbol": symbol,
         "interval": INTERVAL,
@@ -55,9 +76,27 @@ def fetch_klines(symbol: str, start_ms: int, end_ms: int) -> list:
         "endTime": end_ms,
         "limit": MAX_CANDLES_PER_CALL,
     }
-    resp = requests.get(BASE_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = _SESSION.get(BASE_URL, params=params, timeout=(5, 30))  # (connect, read)
+            if resp.status_code == 418:
+                raise BinanceBanError(f"Binance IP ban (HTTP 418): {resp.text[:200]}")
+            if resp.status_code in RETRYABLE_STATUS and attempt < MAX_ATTEMPTS:
+                wait = float(resp.headers.get("Retry-After", 0) or 0) or _backoff(attempt)
+                print(f"    {symbol}: HTTP {resp.status_code}, retry {attempt}/{MAX_ATTEMPTS} in {wait:.1f}s")
+                time_module.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            if attempt == MAX_ATTEMPTS:
+                raise
+            wait = _backoff(attempt)
+            print(f"    {symbol}: {type(e).__name__}, retry {attempt}/{MAX_ATTEMPTS} in {wait:.1f}s")
+            time_module.sleep(wait)
+    raise RuntimeError(f"{symbol}: exhausted {MAX_ATTEMPTS} attempts")
 
 
 def backfill_symbol(conn, symbol: str, start: datetime, end: datetime) -> int:
@@ -132,20 +171,29 @@ def main() -> None:
     print(f"Backfilling {symbols} from {start.date()} to {end.date()} (UTC)\n")
 
     conn = psycopg2.connect(**CONN)
+    failed = []
     try:
         grand_total = 0
         for symbol in symbols:
             print(f"--- {symbol} ---")
-            grand_total += backfill_symbol(conn, symbol, start, end)
+            try:
+                grand_total += backfill_symbol(conn, symbol, start, end)
+            except BinanceBanError:
+                raise   # every later symbol would hit the same ban
+            except (requests.RequestException, RuntimeError) as e:
+                # One symbol failing must not lose the others. Pages already
+                # written are committed; a re-run skips them.
+                conn.rollback()
+                print(f"  {symbol} FAILED: {e}")
+                failed.append(symbol)
         print(f"\nDone. {grand_total} candles fetched across {len(symbols)} symbol(s).")
         print("Note: ON CONFLICT DO NOTHING means re-running this is always safe -- "
               "it will only fill in what's still missing.")
-    except requests.HTTPError as e:
-        print(f"\nBinance API error: {e}")
-        print("Common causes: bad symbol name, or startTime after endTime.")
-        raise
     finally:
         conn.close()
+    if failed:
+        print(f"FAILED: {','.join(failed)}  -> re-run with --symbols {','.join(failed)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

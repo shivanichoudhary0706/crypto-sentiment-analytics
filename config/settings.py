@@ -57,6 +57,7 @@ class Settings:
         self.event_study = yaml_cfg.get("event_study") or {}
         self.features = yaml_cfg.get("features") or {}
         self.signal_model = yaml_cfg.get("signal_model") or {}
+        self.maintenance = yaml_cfg.get("maintenance") or {}
 
         self.sentiment_positive_threshold = yaml_cfg["signals"]["sentiment_positive_threshold"]
         self.sentiment_negative_threshold = yaml_cfg["signals"]["sentiment_negative_threshold"]

@@ -132,3 +132,13 @@ signals:
 logging:
   level: "INFO"
   log_dir: "logs"
+
+maintenance:                 # python -m tools.health_check
+  history_start: "2026-06-01"
+  min_articles_per_day: 1
+  news_backfill_coins: ["BTC/USDT", "ETH/USDT", "MARKET"]
+  retag_source_types: ["news_rss", "gdelt"]
+  kafka_max_lag: 1000
+  stale_minutes: {market: 5, news: 60, scoring: 60, signals: 90}
+  feature_lock_wait_seconds: 120
+  auto_news_backfill_days: 3  

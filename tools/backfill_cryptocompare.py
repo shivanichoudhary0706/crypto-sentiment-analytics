@@ -194,7 +194,9 @@ def backfill_coin(conn, pool: KeyPool, coin: str, category: str,
 
     with conn.cursor() as cur:
         for page in range(MAX_PAGES_PER_COIN):
-            articles = fetch_page(pool, category, before_ts if page > 0 else None)
+            # Start AT `end`, not at the newest article: filling an old gap must not
+            # spend quota paging through every article published since.
+            articles = fetch_page(pool, category, before_ts)
             if not articles:
                 print(f"  {coin}: no more articles returned, stopping.")
                 break

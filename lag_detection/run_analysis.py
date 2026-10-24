@@ -56,7 +56,10 @@ def _json_default(o):
     return str(o)
 
 
-def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict:
+def analyse_one(conn, cfg: LagConfig, coin: str, freq: str) -> dict | None:
+    effect, alpha = cfg.target, cfg.significance
+    df, diag = build_dataset(conn, cfg, coin, freq)
+
     if diag["total_articles"] == 0:
         # Price-only coins (e.g. SOL/LTC/LINK) have no news of their own: nothing to test.
         logger.warning("%s @ %s: no articles for this coin -- skipped (price-only coin)", coin, freq)
