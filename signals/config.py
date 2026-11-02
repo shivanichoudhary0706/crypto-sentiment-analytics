@@ -2,6 +2,25 @@
 Configuration for the signal model: the `signal_model:` section of config.yaml.
 All keys are REQUIRED (no silent defaults). `config.settings` is imported lazily
 so the pure dataset/model code and its tests need no config file or database.
+
+Multiple bar frequencies
+------------------------
+The top level of `signal_model:` is the DEFAULT frequency (e.g. 1h). Other
+frequencies are described under `signal_model.per_freq.<freq>` as overrides:
+
+    signal_model:
+      freq: 1h
+      train_window_bars: 720
+      min_train_bars: 240
+      ...
+      per_freq:
+        4h:
+          train_window_bars: 360   # REQUIRED: counted in bars, so means 4x the time
+          min_train_bars: 120      # REQUIRED: same reason
+          # optional: buy_threshold, sell_threshold, horizon_bars, model: {...}
+
+`train_window_bars` and `min_train_bars` must be set explicitly per frequency,
+because a bar count means a different amount of time at each bar size.
 """
 from __future__ import annotations
 
@@ -15,6 +34,10 @@ _REQUIRED_KEYS = ("targets", "input_coins", "freq", "horizon_bars", "buy_thresho
                   "sell_threshold", "train_window_bars", "min_train_bars", "model", "table")
 _REQUIRED_MODEL_KEYS = ("max_iter", "learning_rate", "max_depth", "min_samples_leaf",
                         "l2_regularization", "random_state")
+# Keys counted in bars: their meaning changes with bar size, so a per_freq entry must set them.
+_PER_FREQ_REQUIRED = ("train_window_bars", "min_train_bars")
+# Keys a per_freq entry may NOT change: the coin universe and the output table are shared.
+_PER_FREQ_FORBIDDEN = ("targets", "input_coins", "table", "freq", "per_freq", "backtest")
 
 
 @dataclass(frozen=True)
@@ -40,9 +63,37 @@ class SignalConfig:
         return self.bar * self.horizon_bars
 
 
-def parse_signal_config(section: dict | None) -> SignalConfig:
+def resolve_freq_section(section: dict, freq: str | None) -> dict:
+    """Return the effective settings for `freq`: the default section, or the default
+    section with `per_freq.<freq>` overrides applied. Pure function."""
+    if freq is None or freq == section.get("freq"):
+        return section
+    per_freq = section.get("per_freq") or {}
+    overrides = per_freq.get(freq)
+    if overrides is None:
+        configured = [section.get("freq"), *per_freq]
+        raise KeyError(f"config.yaml -> signal_model has no settings for freq {freq!r} "
+                       f"(configured: {configured}). Add signal_model.per_freq.{freq} with "
+                       f"{list(_PER_FREQ_REQUIRED)}.")
+    missing = [k for k in _PER_FREQ_REQUIRED if k not in overrides]
+    if missing:
+        raise KeyError(f"config.yaml -> signal_model.per_freq.{freq} is missing required "
+                       f"key(s) {missing} (bar counts must be set for each frequency)")
+    forbidden = [k for k in _PER_FREQ_FORBIDDEN if k in overrides]
+    if forbidden:
+        raise ValueError(f"config.yaml -> signal_model.per_freq.{freq} may not override {forbidden}")
+
+    merged = {k: v for k, v in section.items() if k not in ("per_freq", "backtest")}
+    merged.update({k: v for k, v in overrides.items() if k != "model"})
+    merged["model"] = {**(section.get("model") or {}), **(overrides.get("model") or {})}
+    merged["freq"] = freq
+    return merged
+
+
+def parse_signal_config(section: dict | None, freq: str | None = None) -> SignalConfig:
     if not section:
         raise KeyError("config.yaml has no `signal_model:` section")
+    section = resolve_freq_section(section, freq)
     missing = [k for k in _REQUIRED_KEYS if k not in section]
     if missing:
         raise KeyError(f"config.yaml -> signal_model is missing required key(s): {missing}")
@@ -111,6 +162,7 @@ def load_backtest_config() -> BacktestConfig:
     from config.settings import settings
     return parse_backtest_config((settings.signal_model or {}).get("backtest"))
 
-def load_config() -> SignalConfig:
+def load_config(freq: str | None = None) -> SignalConfig:
+    """Signal settings for `freq` (None = the default frequency in config.yaml)."""
     from config.settings import settings  # lazy: see module docstring
-    return parse_signal_config(settings.signal_model)
+    return parse_signal_config(settings.signal_model, freq)

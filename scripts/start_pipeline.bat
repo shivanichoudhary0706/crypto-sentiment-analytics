@@ -23,5 +23,6 @@ start "market-ingestion"    cmd /k python -m ingestion.market.run_market_ingesti
 start "sentiment-ingestion" cmd /k python -m ingestion.sentiment.run_sentiment_ingestion
 start "sentiment-scoring"   cmd /k python -m sentiment.run_sentiment_scoring
 start "signals"             cmd /k python -m signals.run_signals --every 300
+start "signals-4h"          cmd /k python -m signals.run_signals --freq 4h --skip-features --every 900
 
-echo Pipeline started. 5 windows should be open.
+echo Pipeline started. 6 windows should be open.

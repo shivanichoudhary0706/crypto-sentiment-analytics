@@ -95,6 +95,10 @@ signal_model:
   targets: ["SOL/USDT", "LTC/USDT", "LINK/USDT"]   # coins we emit signals for
   input_coins: ["BTC/USDT", "ETH/USDT"]           # their price moves are model inputs
   freq: "1h"                 # model works on hourly bars
+  per_freq:
+    4h:
+      train_window_bars: 360   # 60 days of 4h bars
+      min_train_bars: 120      # 20 days minimum history
   horizon_bars: 1            # predict the next 1 bar (1 hour)
   buy_threshold: 0.55        # P(up) >= 0.55 -> BUY
   sell_threshold: 0.45       # P(up) <= 0.45 -> SELL, otherwise HOLD

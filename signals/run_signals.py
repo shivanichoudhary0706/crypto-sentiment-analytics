@@ -5,11 +5,15 @@ Run from the project root:
     python -m signals.run_signals                # one pass (feature update + signals)
     python -m signals.run_signals --every 300    # keep running, one pass every 5 minutes
     python -m signals.run_signals --skip-features
+    python -m signals.run_signals --freq 4h --skip-features --every 900   # 4h signals
 
 Each pass first brings features_bar up to date (incremental feature job) unless
 --skip-features is given, then retrains the model on the most recent labelled
 history and writes one signal per target coin for the newest closed bar.
 Re-running for the same bar overwrites that bar's signal (idempotent).
+
+Run only ONE runner with the feature job enabled: the feature job builds every
+frequency, so a second runner (e.g. --freq 4h) must use --skip-features.
 """
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ import psycopg2
 
 from config.logging_config import get_logger
 from signals import store
-from signals.config import SignalConfig, load_config
+from signals.config import FREQS, SignalConfig, load_config
 from signals.dataset import VOLUME_WINDOW, build_model_frame, training_rows
 from signals.model import predict_up, to_action, train
 
@@ -133,6 +137,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--every", type=int, metavar="SECONDS", help="Keep running: one pass every SECONDS")
     p.add_argument("--skip-features", action="store_true",
                    help="Do not run the incremental feature job before generating signals")
+    p.add_argument("--freq", choices=FREQS,
+                   help="Bar size to generate signals for (default: signal_model.freq in config.yaml)")
     args = p.parse_args(argv)
     if args.every is not None and args.every < 30:
         p.error("--every must be at least 30 seconds")
@@ -146,10 +152,11 @@ def _connect():
 
 def main(argv=None) -> None:
     args = parse_args(argv)
-    cfg = load_config()
-    logger.info("Signal job: targets=%s inputs=%s freq=%s horizon=%d bar(s) BUY>=%.2f SELL<=%.2f",
+    cfg = load_config(args.freq)
+    logger.info("Signal job: targets=%s inputs=%s freq=%s horizon=%d bar(s) BUY>=%.2f SELL<=%.2f "
+                "train_window=%d bars",
                 list(cfg.targets), list(cfg.input_coins), cfg.freq, cfg.horizon_bars,
-                cfg.buy_threshold, cfg.sell_threshold)
+                cfg.buy_threshold, cfg.sell_threshold, cfg.train_window_bars)
     conn = _connect()
     if not args.every:
         try:
