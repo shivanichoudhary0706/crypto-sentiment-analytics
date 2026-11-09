@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from api import db
+from signals.config import FREQS, parse_signal_config
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
@@ -26,11 +27,14 @@ REPORTS = Path(__file__).resolve().parents[1] / "reports"
 ES_DIR = REPORTS / "event_study"
 
 # stage -> (SQL returning one column "latest", max acceptable lag in minutes)
+# Signal lag is measured from the bar START: a bar closes one bar later, and the next
+# signal is due one bar after that, plus slack for the runner interval.
 FRESHNESS = {
     "market_ingestion":  ("SELECT MAX(time) AS latest FROM market_data", 5),
     "news_ingestion":    ("SELECT MAX(time) AS latest FROM raw_sentiment", 240),
     "sentiment_scoring": ("SELECT MAX(time) AS latest FROM sentiment_scores", 240),
-    "signals":           ("SELECT MAX(bucket) AS latest FROM signals", 150),
+    "signals_1h":        ("SELECT MAX(bucket) AS latest FROM signals WHERE freq = '1h'", 150),
+    "signals_4h":        ("SELECT MAX(bucket) AS latest FROM signals WHERE freq = '4h'", 510),
 }
 
 
@@ -49,6 +53,12 @@ def to_pair(coin: str) -> str:
     if coin.strip().upper() == "MARKET":
         return "MARKET"
     return f"{to_symbol(coin)[:-4]}/USDT"
+
+
+def check_freq(freq: str) -> str:
+    if freq not in FREQS:
+        raise HTTPException(400, f"invalid freq {freq!r}; one of {list(FREQS)}")
+    return freq
 
 
 def _num(v: str):
@@ -86,7 +96,7 @@ async def lifespan(_app: FastAPI):
     db.close_pool()
 
 
-app = FastAPI(title="Crypto Signal Desk API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Crypto Signal Desk API", version="1.1.0", lifespan=lifespan)
 
 
 @app.exception_handler(psycopg2.OperationalError)
@@ -114,7 +124,7 @@ def signals_latest(freq: str = "1h"):
                close, prob_up, action, model_version, n_train, created_at
         FROM signals
         WHERE freq = %s
-        ORDER BY symbol, bucket DESC""", (freq,))
+        ORDER BY symbol, bucket DESC""", (check_freq(freq),))
     if not rows:
         raise HTTPException(404, f"no signals for freq={freq}")
     return rows
@@ -124,10 +134,10 @@ def signals_latest(freq: str = "1h"):
 def signals_history(coin: str, hours: int = Query(96, ge=1, le=1440), freq: str = "1h"):
     symbol = to_symbol(coin)
     rows = db.fetch_all("""
-        SELECT bucket, close, prob_up, action, model_version
+        SELECT bucket, valid_from, close, prob_up, action, model_version, created_at
         FROM signals
         WHERE symbol = %s AND freq = %s AND bucket >= NOW() - %s * INTERVAL '1 hour'
-        ORDER BY bucket""", (symbol, freq, hours))
+        ORDER BY bucket""", (symbol, check_freq(freq), hours))
     return {"symbol": symbol, "freq": freq, "hours": hours, "rows": rows}
 
 
@@ -182,11 +192,28 @@ def event_study(cause: str, target: str, score: str = "finbert_compound"):
 CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "config.yaml"
 
 
+def freq_settings(section: dict) -> dict:
+    """{freq: settings} for the default freq and every signal_model.per_freq entry.
+    Uses the same parser as the signal runner, so UI and model can never disagree."""
+    out = {}
+    for freq in [section.get("freq", "1h"), *(section.get("per_freq") or {})]:
+        try:
+            c = parse_signal_config(section, freq)
+        except (KeyError, ValueError) as exc:
+            logger.warning("signal_model settings for %s are invalid: %s", freq, exc)
+            continue
+        out[c.freq] = {"buy_threshold": c.buy_threshold, "sell_threshold": c.sell_threshold,
+                       "horizon_bars": c.horizon_bars, "train_window_bars": c.train_window_bars,
+                       "bar_minutes": int(c.bar.total_seconds() // 60)}
+    return out
+
+
 @app.get("/meta")
 def meta():
     """Live signal settings, read from config.yaml so the UI never hardcodes them."""
     cfg = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")).get("signal_model", {})
     return {"freq": cfg.get("freq", "1h"),
+            "freqs": freq_settings(cfg),
             "targets": cfg.get("targets", []),
             "input_coins": cfg.get("input_coins", []),
             "horizon_bars": cfg.get("horizon_bars"),
